@@ -1,10 +1,11 @@
 from flask import Flask, request, jsonify
 import os
 
-app = Flask(__name__)# --- CONFIG STRATEGIE ---
-LONG_COLORS = {"green", "blue"}
-SHORT_COLORS = {"red", "pink", "purple"}  # on accepte pink/purple
+app = Flask(__name__)
 
+# --- CONFIG STRATEGIE ---
+LONG_COLORS = {"green", "blue"}
+SHORT_COLORS = {"red", "pink", "purple"}  # accept pink/purple
 ALLOWED_SYMBOLS = {"BTCUSDT", "ETHUSDT", "SOLUSDT"}
 
 # Mode B : une seule position globale
@@ -14,6 +15,7 @@ STATE = {
     "symbol": None
 }
 
+
 def normalize_symbol(tv_symbol: str) -> str:
     return (tv_symbol or "").upper()
 
@@ -22,9 +24,8 @@ def normalize_symbol(tv_symbol: str) -> str:
 def home():
     return "Bot TradingView DEMO actif"
 
+
 @app.post("/webhook")
-def webhook():
- @app.post("/webhook")
 def webhook():
     data = request.get_json(silent=True) or {}
 
@@ -44,7 +45,7 @@ def webhook():
 
     # --- SORTIES ---
     if STATE["in_position"]:
-        # Sorties via Stoch RSI
+        # Sortie via Stoch RSI
         if action == "EXIT_LONG" and STATE["side"] == "LONG":
             print(f"EXIT LONG (stoch) {STATE['symbol']}")
             STATE.update({"in_position": False, "side": None, "symbol": None})
@@ -55,7 +56,7 @@ def webhook():
             STATE.update({"in_position": False, "side": None, "symbol": None})
             return jsonify({"status": "exit_short"}), 200
 
-        # Sorties via vecteur opposé
+        # Sortie via vecteur opposé
         if event == "VECTOR":
             if STATE["side"] == "LONG" and color in SHORT_COLORS:
                 print(f"EXIT LONG (vector opp) {STATE['symbol']}")
@@ -82,5 +83,8 @@ def webhook():
             return jsonify({"status": "enter_short"}), 200
 
     return jsonify({"status": "ignored"}), 200
- 
 
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", "10000"))
+    app.run(host="0.0.0.0", port=port)
