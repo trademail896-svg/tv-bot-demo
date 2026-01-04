@@ -42,6 +42,10 @@ def webhook():
 
     if symbol not in ALLOWED_SYMBOLS:
         return jsonify({"status": "ignored_symbol"}), 200
+    # Si une position globale est ouverte, ignorer les alertes d'autres symboles
+    if STATE["in_position"] and STATE["symbol"] and symbol != STATE["symbol"]:
+        print(f"IGNORED (other symbol) open={STATE['symbol']} got={symbol}")
+        return jsonify({"status": "ignored_other_symbol"}), 200
 
     # --- SORTIES ---
     if STATE["in_position"]:
