@@ -21,9 +21,10 @@ STATE = {
 }
 
 # --- BITMART FUTURES V2 CONFIG ---
-BITMART_KEY = os.environ.get("BITMART_API_KEY", "")
-BITMART_SECRET = os.environ.get("BITMART_API_SECRET", "")
-BITMART_MEMO = os.environ.get("BITMART_API_MEMO", "")
+BITMART_KEY = (os.environ.get("BITMART_API_KEY", "") or "").strip()
+BITMART_SECRET = (os.environ.get("BITMART_API_SECRET", "") or "").strip()
+BITMART_MEMO = (os.environ.get("BITMART_API_MEMO", "") or "").strip()
+
 
 BITMART_MODE = os.environ.get("BITMART_MODE", "DEMO").upper()
 BASE_URL = "https://demo-api-cloud-v2.bitmart.com" if BITMART_MODE == "DEMO" else "https://api-cloud-v2.bitmart.com"
