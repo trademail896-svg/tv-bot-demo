@@ -33,7 +33,17 @@ def normalize_symbol(s):
     return (s or "").upper()
 
 def get_size(symbol):
-    return int(os.environ.get(f"SIZE_{symbol}", "1"))
+    # size Futures = int, on force >= 1
+    try:
+        n = int(os.environ.get(f"SIZE_{symbol}", "1"))
+        return max(1, n)
+    except Exception:
+        return 1
+
+def extract_code(res: dict):
+    # res = {"http":..., "json": {...}} ou {"http":..., "text":...}
+    j = res.get("json") or {}
+    return j.get("code")
 
 def sign_request(timestamp, body):
     body_str = json.dumps(body, separators=(",", ":"), sort_keys=True)
@@ -74,7 +84,7 @@ def open_market(symbol, side):
     return bm_post("/contract/private/submit-order", {
         "symbol": symbol,
         "type": "market",
-        "side": 1 if side == "LONG" else 4,
+        "side": 1 if side == "LONG" else 4,   # 1=buy open, 4=sell open
         "mode": 1,
         "leverage": "1",
         "open_type": "isolated",
@@ -85,7 +95,7 @@ def close_market(symbol, side):
     return bm_post("/contract/private/submit-order", {
         "symbol": symbol,
         "type": "market",
-        "side": 3 if side == "LONG" else 2,
+        "side": 3 if side == "LONG" else 2,   # 3=sell close, 2=buy close
         "mode": 1,
         "leverage": "1",
         "open_type": "isolated",
@@ -132,7 +142,7 @@ def webhook():
     action = data.get("action")
 
     if symbol not in ALLOWED_SYMBOLS:
-        print("IGNORED SYMBOL")
+        print("IGNORED SYMBOL:", symbol)
         return jsonify({"status": "ignored_symbol"}), 200
 
     # Mode B : une seule position globale
@@ -142,27 +152,45 @@ def webhook():
 
     # ========== SORTIES ==========
     if STATE["in_position"]:
+        # Sortie via Stoch
         if action in {"EXIT_LONG", "EXIT_SHORT"}:
-            print("EXIT POSITION (STOCH)")
+            print("EXIT POSITION (STOCH)", STATE)
             res = close_market(STATE["symbol"], STATE["side"])
             print("BITMART CLOSE:", res)
-            STATE.update({"in_position": False, "side": None, "symbol": None})
-            return jsonify({"status": "exit"}), 200
 
+            if extract_code(res) == 1000:
+                STATE.update({"in_position": False, "side": None, "symbol": None})
+                return jsonify({"status": "exit"}), 200
+
+            # Close échoué => on garde STATE pour éviter incohérence
+            print("CLOSE FAILED - KEEPING STATE", STATE)
+            return jsonify({"status": "close_failed", "bitmart": res}), 200
+
+        # Sortie via vecteur opposé
         if event == "VECTOR":
             if STATE["side"] == "LONG" and color in SHORT_COLORS:
-                print("EXIT LONG (VECTOR OPP)")
+                print("EXIT LONG (VECTOR OPP)", STATE)
                 res = close_market(symbol, "LONG")
                 print("BITMART CLOSE:", res)
-                STATE.update({"in_position": False, "side": None, "symbol": None})
-                return jsonify({"status": "exit"}), 200
+
+                if extract_code(res) == 1000:
+                    STATE.update({"in_position": False, "side": None, "symbol": None})
+                    return jsonify({"status": "exit"}), 200
+
+                print("CLOSE FAILED - KEEPING STATE", STATE)
+                return jsonify({"status": "close_failed", "bitmart": res}), 200
 
             if STATE["side"] == "SHORT" and color in LONG_COLORS:
-                print("EXIT SHORT (VECTOR OPP)")
+                print("EXIT SHORT (VECTOR OPP)", STATE)
                 res = close_market(symbol, "SHORT")
                 print("BITMART CLOSE:", res)
-                STATE.update({"in_position": False, "side": None, "symbol": None})
-                return jsonify({"status": "exit"}), 200
+
+                if extract_code(res) == 1000:
+                    STATE.update({"in_position": False, "side": None, "symbol": None})
+                    return jsonify({"status": "exit"}), 200
+
+                print("CLOSE FAILED - KEEPING STATE", STATE)
+                return jsonify({"status": "close_failed", "bitmart": res}), 200
 
         print("HOLDING POSITION", STATE)
         return jsonify({"status": "holding"}), 200
@@ -171,29 +199,46 @@ def webhook():
     if event == "VECTOR":
         if color in LONG_COLORS:
             print("ENTER LONG", symbol)
-            res = open_market(symbol, "LONG")
-            print("BITMART ENTRY:", res)
+            res_entry = open_market(symbol, "LONG")
+            print("BITMART ENTRY:", res_entry)
 
-            sl = float(data.get("low", 0))
-            if sl > 0:
-                print("BITMART SL:", set_stop_loss(symbol, "LONG", sl))
+            if extract_code(res_entry) != 1000:
+                print("ENTRY FAILED - NOT UPDATING STATE")
+                return jsonify({"status": "entry_failed", "bitmart": res_entry}), 200
 
+            # Entrée confirmée => on met STATE
             STATE.update({"in_position": True, "side": "LONG", "symbol": symbol})
+
+            sl = float(data.get("low", 0) or 0)
+            if sl > 0:
+                res_sl = set_stop_loss(symbol, "LONG", sl)
+                print("BITMART SL:", res_sl)
+                if extract_code(res_sl) != 1000:
+                    print("SL FAILED (position kept)")
+
             return jsonify({"status": "enter_long"}), 200
 
         if color in SHORT_COLORS:
             print("ENTER SHORT", symbol)
-            res = open_market(symbol, "SHORT")
-            print("BITMART ENTRY:", res)
+            res_entry = open_market(symbol, "SHORT")
+            print("BITMART ENTRY:", res_entry)
 
-            sl = float(data.get("high", 0))
-            if sl > 0:
-                print("BITMART SL:", set_stop_loss(symbol, "SHORT", sl))
+            if extract_code(res_entry) != 1000:
+                print("ENTRY FAILED - NOT UPDATING STATE")
+                return jsonify({"status": "entry_failed", "bitmart": res_entry}), 200
 
             STATE.update({"in_position": True, "side": "SHORT", "symbol": symbol})
+
+            sl = float(data.get("high", 0) or 0)
+            if sl > 0:
+                res_sl = set_stop_loss(symbol, "SHORT", sl)
+                print("BITMART SL:", res_sl)
+                if extract_code(res_sl) != 1000:
+                    print("SL FAILED (position kept)")
+
             return jsonify({"status": "enter_short"}), 200
 
-    print("IGNORED (NO RULE MATCHED)")
+    print("IGNORED (NO RULE MATCHED) state=", STATE, "event=", event, "color=", color, "action=", action)
     return jsonify({"status": "ignored"}), 200
 
 if __name__ == "__main__":
