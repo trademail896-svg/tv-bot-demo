@@ -15,7 +15,7 @@ ALLOWED_SYMBOLS = {"BTCUSDT", "ETHUSDT", "SOLUSDT"}
 
 STATE = {
     "in_position": False,
-    "side": None,     # LONG / SHORT
+    "side": None,     # "LONG" ou "SHORT"
     "symbol": None
 }
 
@@ -74,7 +74,7 @@ def open_market(symbol, side):
     return bm_post("/contract/private/submit-order", {
         "symbol": symbol,
         "type": "market",
-        "side": 1 if side == "LONG" else 4,   # 1=buy open, 4=sell open
+        "side": 1 if side == "LONG" else 4,
         "mode": 1,
         "leverage": "1",
         "open_type": "isolated",
@@ -85,7 +85,7 @@ def close_market(symbol, side):
     return bm_post("/contract/private/submit-order", {
         "symbol": symbol,
         "type": "market",
-        "side": 3 if side == "LONG" else 2,   # 3=sell close, 2=buy close
+        "side": 3 if side == "LONG" else 2,
         "mode": 1,
         "leverage": "1",
         "open_type": "isolated",
@@ -114,11 +114,17 @@ def home():
 def webhook():
     data = request.get_json(silent=True) or {}
 
-    # sécurité
+    # Sécurité
     if data.get("secret") != SECRET:
         return jsonify({"status": "forbidden"}), 403
 
     print("ALERTE:", data)
+
+    # ===== RESET MANUEL (TEST / DEMO) =====
+    if data.get("event") == "RESET":
+        STATE.update({"in_position": False, "side": None, "symbol": None})
+        print("STATE RESET OK")
+        return jsonify({"status": "state_reset"}), 200
 
     symbol = normalize_symbol(data.get("ticker"))
     event = data.get("event")
@@ -126,17 +132,18 @@ def webhook():
     action = data.get("action")
 
     if symbol not in ALLOWED_SYMBOLS:
+        print("IGNORED SYMBOL")
         return jsonify({"status": "ignored_symbol"}), 200
 
-    # mode B : une seule position globale
+    # Mode B : une seule position globale
     if STATE["in_position"] and STATE["symbol"] != symbol:
-        print("IGNORED OTHER SYMBOL")
+        print(f"IGNORED OTHER SYMBOL open={STATE['symbol']} got={symbol}")
         return jsonify({"status": "ignored_other_symbol"}), 200
 
     # ========== SORTIES ==========
     if STATE["in_position"]:
         if action in {"EXIT_LONG", "EXIT_SHORT"}:
-            print("EXIT POSITION")
+            print("EXIT POSITION (STOCH)")
             res = close_market(STATE["symbol"], STATE["side"])
             print("BITMART CLOSE:", res)
             STATE.update({"in_position": False, "side": None, "symbol": None})
@@ -144,20 +151,20 @@ def webhook():
 
         if event == "VECTOR":
             if STATE["side"] == "LONG" and color in SHORT_COLORS:
-                print("EXIT LONG VECTOR")
+                print("EXIT LONG (VECTOR OPP)")
                 res = close_market(symbol, "LONG")
                 print("BITMART CLOSE:", res)
                 STATE.update({"in_position": False, "side": None, "symbol": None})
                 return jsonify({"status": "exit"}), 200
 
             if STATE["side"] == "SHORT" and color in LONG_COLORS:
-                print("EXIT SHORT VECTOR")
+                print("EXIT SHORT (VECTOR OPP)")
                 res = close_market(symbol, "SHORT")
-                print("BITMART CLOSE:", res)
                 print("BITMART CLOSE:", res)
                 STATE.update({"in_position": False, "side": None, "symbol": None})
                 return jsonify({"status": "exit"}), 200
 
+        print("HOLDING POSITION", STATE)
         return jsonify({"status": "holding"}), 200
 
     # ========== ENTREES ==========
@@ -186,6 +193,7 @@ def webhook():
             STATE.update({"in_position": True, "side": "SHORT", "symbol": symbol})
             return jsonify({"status": "enter_short"}), 200
 
+    print("IGNORED (NO RULE MATCHED)")
     return jsonify({"status": "ignored"}), 200
 
 if __name__ == "__main__":
