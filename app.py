@@ -8,51 +8,51 @@ import requests
 
 app = Flask(__name__)
 
-# ================= CONFIG STRATEGIE =================
+# ================= STRATEGIE =================
 LONG_COLORS = {"green", "blue"}
 SHORT_COLORS = {"red", "pink", "purple"}
 ALLOWED_SYMBOLS = {"BTCUSDT", "ETHUSDT", "SOLUSDT"}
 
 STATE = {
     "in_position": False,
-    "side": None,
+    "side": None,     # LONG / SHORT
     "symbol": None
 }
 
 SECRET = "TV_BOT_DEMO_2026"
 
 # ================= BITMART CONFIG =================
-BITMART_KEY = (os.environ.get("BITMART_API_KEY", "") or "").strip()
-BITMART_SECRET = (os.environ.get("BITMART_API_SECRET", "") or "").strip()
-BITMART_MEMO = (os.environ.get("BITMART_API_MEMO", "") or "").strip()
+BITMART_KEY = (os.environ.get("BITMART_API_KEY") or "").strip()
+BITMART_SECRET = (os.environ.get("BITMART_API_SECRET") or "").strip()
+BITMART_MEMO = (os.environ.get("BITMART_API_MEMO") or "").strip()
 
 BASE_URL = "https://demo-api-cloud-v2.bitmart.com"
 
+# ================= UTILS =================
 def normalize_symbol(s):
     return (s or "").upper()
 
 def get_size(symbol):
     return int(os.environ.get(f"SIZE_{symbol}", "1"))
 
-def sign_request(ts, body):
+def sign_request(timestamp, body):
     body_str = json.dumps(body, separators=(",", ":"), sort_keys=True)
-    msg = f"{ts}#{BITMART_MEMO}#{body_str}"
+    message = f"{timestamp}#{BITMART_MEMO}#{body_str}"
     return hmac.new(
         BITMART_SECRET.encode(),
-        msg.encode(),
+        message.encode(),
         hashlib.sha256
     ).hexdigest()
 
 def bm_post(path, body):
     ts = int(time.time() * 1000)
-    sign = sign_request(ts, body)
+    signature = sign_request(ts, body)
 
     headers = {
         "Content-Type": "application/json",
-        "X-BM-APIKEY": BITMART_KEY,
+        "X-BM-KEY": BITMART_KEY,
         "X-BM-TIMESTAMP": str(ts),
-        "X-BM-SIGNATURE": sign,
-        "X-BM-MEMO": BITMART_MEMO,
+        "X-BM-SIGN": signature,
     }
 
     try:
@@ -69,12 +69,12 @@ def bm_post(path, body):
     except Exception as e:
         return {"http": 0, "error": str(e)}
 
-# ================= ACTIONS BITMART =================
+# ================= BITMART ACTIONS =================
 def open_market(symbol, side):
     return bm_post("/contract/private/submit-order", {
         "symbol": symbol,
         "type": "market",
-        "side": 1 if side == "LONG" else 4,
+        "side": 1 if side == "LONG" else 4,   # 1=buy open, 4=sell open
         "mode": 1,
         "leverage": "1",
         "open_type": "isolated",
@@ -85,14 +85,14 @@ def close_market(symbol, side):
     return bm_post("/contract/private/submit-order", {
         "symbol": symbol,
         "type": "market",
-        "side": 3 if side == "LONG" else 2,
+        "side": 3 if side == "LONG" else 2,   # 3=sell close, 2=buy close
         "mode": 1,
         "leverage": "1",
         "open_type": "isolated",
         "size": get_size(symbol)
     })
 
-def set_sl(symbol, side, price):
+def set_stop_loss(symbol, side, price):
     return bm_post("/contract/private/submit-tp-sl-order", {
         "symbol": symbol,
         "type": "stop_loss",
@@ -114,6 +114,7 @@ def home():
 def webhook():
     data = request.get_json(silent=True) or {}
 
+    # sécurité
     if data.get("secret") != SECRET:
         return jsonify({"status": "forbidden"}), 403
 
@@ -127,11 +128,12 @@ def webhook():
     if symbol not in ALLOWED_SYMBOLS:
         return jsonify({"status": "ignored_symbol"}), 200
 
+    # mode B : une seule position globale
     if STATE["in_position"] and STATE["symbol"] != symbol:
         print("IGNORED OTHER SYMBOL")
         return jsonify({"status": "ignored_other_symbol"}), 200
 
-    # ===== SORTIES =====
+    # ========== SORTIES ==========
     if STATE["in_position"]:
         if action in {"EXIT_LONG", "EXIT_SHORT"}:
             print("EXIT POSITION")
@@ -152,20 +154,23 @@ def webhook():
                 print("EXIT SHORT VECTOR")
                 res = close_market(symbol, "SHORT")
                 print("BITMART CLOSE:", res)
+                print("BITMART CLOSE:", res)
                 STATE.update({"in_position": False, "side": None, "symbol": None})
                 return jsonify({"status": "exit"}), 200
 
         return jsonify({"status": "holding"}), 200
 
-    # ===== ENTREES =====
+    # ========== ENTREES ==========
     if event == "VECTOR":
         if color in LONG_COLORS:
             print("ENTER LONG", symbol)
             res = open_market(symbol, "LONG")
             print("BITMART ENTRY:", res)
+
             sl = float(data.get("low", 0))
             if sl > 0:
-                print("BITMART SL:", set_sl(symbol, "LONG", sl))
+                print("BITMART SL:", set_stop_loss(symbol, "LONG", sl))
+
             STATE.update({"in_position": True, "side": "LONG", "symbol": symbol})
             return jsonify({"status": "enter_long"}), 200
 
@@ -173,9 +178,11 @@ def webhook():
             print("ENTER SHORT", symbol)
             res = open_market(symbol, "SHORT")
             print("BITMART ENTRY:", res)
+
             sl = float(data.get("high", 0))
             if sl > 0:
-                print("BITMART SL:", set_sl(symbol, "SHORT", sl))
+                print("BITMART SL:", set_stop_loss(symbol, "SHORT", sl))
+
             STATE.update({"in_position": True, "side": "SHORT", "symbol": symbol})
             return jsonify({"status": "enter_short"}), 200
 
