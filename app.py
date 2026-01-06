@@ -13,6 +13,7 @@ LONG_COLORS = {"green", "blue"}
 SHORT_COLORS = {"red", "pink", "purple"}
 ALLOWED_SYMBOLS = {"BTCUSDT", "ETHUSDT", "SOLUSDT"}
 
+# Mode B : une seule position globale à la fois
 STATE = {
     "in_position": False,
     "side": None,     # "LONG" ou "SHORT"
@@ -30,7 +31,16 @@ BASE_URL = "https://demo-api-cloud-v2.bitmart.com"
 
 # ================= UTILS =================
 def normalize_symbol(s):
-    return (s or "").upper()
+    """
+    TradingView peut envoyer:
+      - BTCUSDT
+      - BTCUSDT.P  (perp)
+    On normalise pour matcher ALLOWED_SYMBOLS et BitMart.
+    """
+    sym = (s or "").upper().strip()
+    if sym.endswith(".P"):
+        sym = sym[:-2]
+    return sym
 
 def get_size(symbol):
     # size Futures = int, on force >= 1
@@ -41,11 +51,14 @@ def get_size(symbol):
         return 1
 
 def extract_code(res: dict):
-    # res = {"http":..., "json": {...}} ou {"http":..., "text":...}
     j = res.get("json") or {}
     return j.get("code")
 
 def sign_request(timestamp, body):
+    """
+    BitMart signature (cloud v2):
+      sign = HMAC_SHA256(secret, f"{timestamp}#{memo}#{body_json_sorted}")
+    """
     body_str = json.dumps(body, separators=(",", ":"), sort_keys=True)
     message = f"{timestamp}#{BITMART_MEMO}#{body_str}"
     return hmac.new(
@@ -162,7 +175,6 @@ def webhook():
                 STATE.update({"in_position": False, "side": None, "symbol": None})
                 return jsonify({"status": "exit"}), 200
 
-            # Close échoué => on garde STATE pour éviter incohérence
             print("CLOSE FAILED - KEEPING STATE", STATE)
             return jsonify({"status": "close_failed", "bitmart": res}), 200
 
@@ -206,7 +218,6 @@ def webhook():
                 print("ENTRY FAILED - NOT UPDATING STATE")
                 return jsonify({"status": "entry_failed", "bitmart": res_entry}), 200
 
-            # Entrée confirmée => on met STATE
             STATE.update({"in_position": True, "side": "LONG", "symbol": symbol})
 
             sl = float(data.get("low", 0) or 0)
